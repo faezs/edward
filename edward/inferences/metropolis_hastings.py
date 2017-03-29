@@ -7,12 +7,17 @@ import tensorflow as tf
 
 from collections import OrderedDict
 from edward.inferences.monte_carlo import MonteCarlo
-from edward.models import RandomVariable, Uniform
+from edward.models import RandomVariable
 from edward.util import copy
+
+try:
+  from edward.models import Uniform
+except Exception as e:
+  raise ImportError("{0}. Your TensorFlow version is not supported.".format(e))
 
 
 class MetropolisHastings(MonteCarlo):
-  """Metropolis-Hastings.
+  """Metropolis-Hastings (Metropolis et al., 1953; Hastings, 1970).
 
   Notes
   -----
@@ -31,7 +36,7 @@ class MetropolisHastings(MonteCarlo):
   q(\\beta)`. This is unbiased (and therefore asymptotically exact as a
   pseudo-marginal method) if :math:`q(\\beta) = p(\\beta \mid x)`.
   """
-  def __init__(self, latent_vars, proposal_vars, data=None, model_wrapper=None):
+  def __init__(self, latent_vars, proposal_vars, data=None):
     """
     Parameters
     ----------
@@ -44,27 +49,28 @@ class MetropolisHastings(MonteCarlo):
     >>> z = Normal(mu=0.0, sigma=1.0)
     >>> x = Normal(mu=tf.ones(10) * z, sigma=1.0)
     >>>
-    >>> qz = Empirical(tf.Variable(tf.zeros([500])))
+    >>> qz = Empirical(tf.Variable(tf.zeros(500)))
     >>> proposal_z = Normal(mu=z, sigma=0.5)
     >>> data = {x: np.array([0.0] * 10, dtype=np.float32)}
     >>> inference = ed.MetropolisHastings({z: qz}, {z: proposal_z}, data)
     """
     self.proposal_vars = proposal_vars
-    super(MetropolisHastings, self).__init__(latent_vars, data, model_wrapper)
+    super(MetropolisHastings, self).__init__(latent_vars, data)
 
   def build_update(self):
-    """
-    Draw sample from proposal conditional on last sample. Then accept
-    or reject the sample based on the ratio,
+    """Draw sample from proposal conditional on last sample. Then
+    accept or reject the sample based on the ratio,
 
     .. math::
-      \\text{ratio} = \log p(x, z^{new}) - \log p(x, z^{old}) +
-        \log g(z^{new} \mid z^{old}) - \log g(z^{old} \mid z^{new})
+      \\text{ratio} =
+          \log p(x, z^{\\text{new}}) - \log p(x, z^{\\text{old}}) +
+          \log g(z^{\\text{new}} \mid z^{\\text{old}}) -
+          \log g(z^{\\text{old}} \mid z^{\\text{new}})
 
     Notes
     -----
     The updates assume each Empirical random variable is directly
-    parameterized by tf.Variables().
+    parameterized by ``tf.Variable``s.
     """
     old_sample = {z: tf.gather(qz.params, tf.maximum(self.t - 1, 0))
                   for z, qz in six.iteritems(self.latent_vars)}
@@ -106,27 +112,22 @@ class MetropolisHastings(MonteCarlo):
       # Increment ratio.
       ratio -= tf.reduce_sum(proposal_zold.log_prob(dict_swap_old[z]))
 
-    if self.model_wrapper is None:
-      for z in six.iterkeys(self.latent_vars):
-        # Build priors p(znew) and p(zold).
-        znew = copy(z, dict_swap_new, scope=scope_new)
-        zold = copy(z, dict_swap_old, scope=scope_old)
-        # Increment ratio.
-        ratio += tf.reduce_sum(znew.log_prob(dict_swap_new[z]))
-        ratio -= tf.reduce_sum(zold.log_prob(dict_swap_old[z]))
+    for z in six.iterkeys(self.latent_vars):
+      # Build priors p(znew) and p(zold).
+      znew = copy(z, dict_swap_new, scope=scope_new)
+      zold = copy(z, dict_swap_old, scope=scope_old)
+      # Increment ratio.
+      ratio += tf.reduce_sum(znew.log_prob(dict_swap_new[z]))
+      ratio -= tf.reduce_sum(zold.log_prob(dict_swap_old[z]))
 
-      for x in six.iterkeys(self.data):
-        if isinstance(x, RandomVariable):
-          # Build likelihoods p(x | znew) and p(x | zold).
-          x_znew = copy(x, dict_swap_new, scope=scope_new)
-          x_zold = copy(x, dict_swap_old, scope=scope_old)
-          # Increment ratio.
-          ratio += tf.reduce_sum(x_znew.log_prob(dict_swap[x]))
-          ratio -= tf.reduce_sum(x_zold.log_prob(dict_swap[x]))
-    else:
-        x = self.data
-        ratio += self.model_wrapper.log_prob(x, new_sample)
-        ratio -= self.model_wrapper.log_prob(x, old_sample)
+    for x in six.iterkeys(self.data):
+      if isinstance(x, RandomVariable):
+        # Build likelihoods p(x | znew) and p(x | zold).
+        x_znew = copy(x, dict_swap_new, scope=scope_new)
+        x_zold = copy(x, dict_swap_old, scope=scope_old)
+        # Increment ratio.
+        ratio += tf.reduce_sum(x_znew.log_prob(dict_swap[x]))
+        ratio -= tf.reduce_sum(x_zold.log_prob(dict_swap[x]))
 
     # Accept or reject sample.
     u = Uniform().sample()
@@ -147,5 +148,5 @@ class MetropolisHastings(MonteCarlo):
       assign_ops.append(tf.scatter_update(variable, self.t, sample[z]))
 
     # Increment n_accept (if accepted).
-    assign_ops.append(self.n_accept.assign_add(tf.select(accept, 1, 0)))
+    assign_ops.append(self.n_accept.assign_add(tf.where(accept, 1, 0)))
     return tf.group(*assign_ops)

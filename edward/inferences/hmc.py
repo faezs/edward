@@ -7,8 +7,13 @@ import tensorflow as tf
 
 from collections import OrderedDict
 from edward.inferences.monte_carlo import MonteCarlo
-from edward.models import Normal, RandomVariable, Uniform
+from edward.models import RandomVariable
 from edward.util import copy
+
+try:
+  from edward.models import Normal, Uniform
+except Exception as e:
+  raise ImportError("{0}. Your TensorFlow version is not supported.".format(e))
 
 
 class HMC(MonteCarlo):
@@ -38,7 +43,7 @@ class HMC(MonteCarlo):
     >>> z = Normal(mu=0.0, sigma=1.0)
     >>> x = Normal(mu=tf.ones(10) * z, sigma=1.0)
     >>>
-    >>> qz = Empirical(tf.Variable(tf.zeros([500])))
+    >>> qz = Empirical(tf.Variable(tf.zeros(500)))
     >>> data = {x: np.array([0.0] * 10, dtype=np.float32)}
     >>> inference = ed.HMC({z: qz}, data)
     """
@@ -59,15 +64,14 @@ class HMC(MonteCarlo):
     return super(HMC, self).initialize(*args, **kwargs)
 
   def build_update(self):
-    """
-    Simulate Hamiltonian dynamics using a numerical integrator.
+    """Simulate Hamiltonian dynamics using a numerical integrator.
     Correct for the integrator's discretization error using an
     acceptance ratio.
 
     Notes
     -----
     The updates assume each Empirical random variable is directly
-    parameterized by tf.Variables().
+    parameterized by ``tf.Variable``s.
     """
     old_sample = {z: tf.gather(qz.params, tf.maximum(self.t - 1, 0))
                   for z, qz in six.iteritems(self.latent_vars)}
@@ -112,12 +116,11 @@ class HMC(MonteCarlo):
       assign_ops.append(tf.scatter_update(variable, self.t, sample[z]))
 
     # Increment n_accept (if accepted).
-    assign_ops.append(self.n_accept.assign_add(tf.select(accept, 1, 0)))
+    assign_ops.append(self.n_accept.assign_add(tf.where(accept, 1, 0)))
     return tf.group(*assign_ops)
 
   def _log_joint(self, z_sample):
-    """
-    Utility function to calculate model's log joint density,
+    """Utility function to calculate model's log joint density,
     log p(x, z), for inputs z (and fixed data x).
 
     Parameters
@@ -125,32 +128,28 @@ class HMC(MonteCarlo):
     z_sample : dict
       Latent variable keys to samples.
     """
-    if self.model_wrapper is None:
-      self.scope_iter += 1
-      scope = 'inference_' + str(id(self)) + '/' + str(self.scope_iter)
-      # Form dictionary in order to replace conditioning on prior or
-      # observed variable with conditioning on a specific value.
-      dict_swap = z_sample.copy()
-      for x, qx in six.iteritems(self.data):
-        if isinstance(x, RandomVariable):
-          if isinstance(qx, RandomVariable):
-            qx_copy = copy(qx, scope=scope)
-            dict_swap[x] = qx_copy.value()
-          else:
-            dict_swap[x] = qx
+    self.scope_iter += 1
+    scope = 'inference_' + str(id(self)) + '/' + str(self.scope_iter)
+    # Form dictionary in order to replace conditioning on prior or
+    # observed variable with conditioning on a specific value.
+    dict_swap = z_sample.copy()
+    for x, qx in six.iteritems(self.data):
+      if isinstance(x, RandomVariable):
+        if isinstance(qx, RandomVariable):
+          qx_copy = copy(qx, scope=scope)
+          dict_swap[x] = qx_copy.value()
+        else:
+          dict_swap[x] = qx
 
-      log_joint = 0.0
-      for z in six.iterkeys(self.latent_vars):
-        z_copy = copy(z, dict_swap, scope=scope)
-        log_joint += tf.reduce_sum(z_copy.log_prob(dict_swap[z]))
+    log_joint = 0.0
+    for z in six.iterkeys(self.latent_vars):
+      z_copy = copy(z, dict_swap, scope=scope)
+      log_joint += tf.reduce_sum(z_copy.log_prob(dict_swap[z]))
 
-      for x in six.iterkeys(self.data):
-        if isinstance(x, RandomVariable):
-          x_copy = copy(x, dict_swap, scope=scope)
-          log_joint += tf.reduce_sum(x_copy.log_prob(dict_swap[x]))
-    else:
-      x = self.data
-      log_joint = self.model_wrapper.log_prob(x, z_sample)
+    for x in six.iterkeys(self.data):
+      if isinstance(x, RandomVariable):
+        x_copy = copy(x, dict_swap, scope=scope)
+        log_joint += tf.reduce_sum(x_copy.log_prob(dict_swap[x]))
 
     return log_joint
 

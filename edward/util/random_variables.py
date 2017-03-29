@@ -14,13 +14,76 @@ from tensorflow.python.framework.ops import set_shapes_for_outputs
 from tensorflow.python.util import compat
 
 
-def copy_rv(value, dict_swap, scope, replace_itself, copy_q):
-  if isinstance(value, RandomVariable) or \
-     isinstance(value, tf.Variable) or \
-     isinstance(value, tf.Tensor) or \
-     isinstance(value, tf.Operation):
-      value = copy(value, dict_swap, scope, replace_itself, copy_q)
-  return value
+def check_data(data):
+  """Check that the data dictionary passed during inference and
+  criticism is valid.
+  """
+  if not isinstance(data, dict):
+    raise TypeError("data must have type dict.")
+
+  for key, value in six.iteritems(data):
+    if isinstance(key, tf.Tensor) and "Placeholder" in key.op.type:
+      if isinstance(value, RandomVariable):
+        raise TypeError("The value of a feed cannot be a ed.RandomVariable "
+                        "object. "
+                        "Acceptable feed values include Python scalars, "
+                        "strings, lists, numpy ndarrays, or TensorHandles.")
+      elif isinstance(value, tf.Tensor):
+        raise TypeError("The value of a feed cannot be a tf.Tensor object. "
+                        "Acceptable feed values include Python scalars, "
+                        "strings, lists, numpy ndarrays, or TensorHandles.")
+    elif isinstance(key, (RandomVariable, tf.Tensor)):
+      if isinstance(value, (RandomVariable, tf.Tensor)):
+        if not key.shape.is_compatible_with(value.shape):
+          raise TypeError("Key-value pair in data does not have same "
+                          "shape: {}, {}".format(key.shape, value.shape))
+        elif key.dtype != value.dtype:
+          raise TypeError("Key-value pair in data does not have same "
+                          "dtype: {}, {}".format(key.dtype, value.dtype))
+      elif isinstance(value, (float, list, int, np.ndarray, np.number, str)):
+        if not key.shape.is_compatible_with(np.shape(value)):
+          raise TypeError("Key-value pair in data does not have same "
+                          "shape: {}, {}".format(key.shape, np.shape(value)))
+        elif isinstance(value, (np.ndarray, np.number)) and \
+                not np.issubdtype(value.dtype, np.float) and \
+                not np.issubdtype(value.dtype, np.int) and \
+                not np.issubdtype(value.dtype, np.str):
+          raise TypeError("Data value has an invalid dtype: "
+                          "{}".format(value.dtype))
+      else:
+        raise TypeError("Data value has an invalid type: "
+                        "{}".format(type(value)))
+    else:
+      raise TypeError("Data key has an invalid type: {}".format(type(key)))
+
+
+def check_latent_vars(latent_vars):
+  """Check that the latent variable dictionary passed during inference and
+  criticism is valid.
+  """
+  if not isinstance(latent_vars, dict):
+    raise TypeError("latent_vars must have type dict.")
+
+  for key, value in six.iteritems(latent_vars):
+    if not isinstance(key, (RandomVariable, tf.Tensor)):
+      raise TypeError("Latent variable key has an invalid type: "
+                      "{}".format(type(key)))
+    elif not isinstance(value, (RandomVariable, tf.Tensor)):
+      raise TypeError("Latent variable value has an invalid type: "
+                      "{}".format(type(value)))
+    elif not key.shape.is_compatible_with(value.shape):
+      raise TypeError("Key-value pair in latent_vars does not have same "
+                      "shape: {}, {}".format(key.shape, value.shape))
+    elif key.dtype != value.dtype:
+      raise TypeError("Key-value pair in latent_vars does not have same "
+                      "dtype: {}, {}".format(key.dtype, value.dtype))
+
+
+def copy_default(x, *args, **kwargs):
+  if isinstance(x, (RandomVariable, tf.Operation, tf.Tensor, tf.Variable)):
+    x = copy(x, *args, **kwargs)
+
+  return x
 
 
 def copy(org_instance, dict_swap=None, scope="copied",
@@ -37,7 +100,7 @@ def copy(org_instance, dict_swap=None, scope="copied",
 
   Parameters
   ----------
-  org_instance : RandomVariable, tf.Variable, tf.Tensor, or tf.Operation
+  org_instance : RandomVariable, tf.Operation, tf.Tensor, or tf.Variable
     Node to add in graph with replaced ancestors.
   dict_swap : dict, optional
     Random variables, variables, tensors, or operations to swap with.
@@ -77,7 +140,7 @@ def copy(org_instance, dict_swap=None, scope="copied",
   >>>
   >>> # This adds a subgraph with newly copied nodes,
   >>> # `copied/qx` -> `copied/z` <- `copied/y`
-  >>> z_new = copy(z, {x: qx})
+  >>> z_new = ed.copy(z, {x: qx})
   >>>
   >>> sess = tf.Session()
   >>> sess.run(z)
@@ -85,10 +148,8 @@ def copy(org_instance, dict_swap=None, scope="copied",
   >>> sess.run(z_new)
   12.0
   """
-  if not isinstance(org_instance, RandomVariable) and \
-     not isinstance(org_instance, tf.Variable) and \
-     not isinstance(org_instance, tf.Tensor) and \
-     not isinstance(org_instance, tf.Operation):
+  if not isinstance(org_instance,
+                    (RandomVariable, tf.Operation, tf.Tensor, tf.Variable)):
     raise TypeError("Could not copy instance: " + str(org_instance))
 
   if dict_swap is None:
@@ -110,7 +171,6 @@ def copy(org_instance, dict_swap=None, scope="copied",
             org_instance = value.value()
           else:
             org_instance = value
-
           if not copy_q:
             return org_instance
           break
@@ -119,13 +179,13 @@ def copy(org_instance, dict_swap=None, scope="copied",
   new_name = scope + '/' + org_instance.name
 
   # If an instance of the same name exists, return appropriately.
-  # Do this for random variables.
+  # Do this for ed.RandomVariable.
   random_variables = {x.name: x for x in
                       graph.get_collection('_random_variable_collection_')}
   if new_name in random_variables:
     return random_variables[new_name]
 
-  # Do this for tensors and operations.
+  # Do this for tf.Tensor and tf.Operation.
   try:
     already_present = graph.as_graph_element(new_name,
                                              allow_tensor=True,
@@ -134,45 +194,38 @@ def copy(org_instance, dict_swap=None, scope="copied",
   except:
     pass
 
-  # If instance is a variable, return it; do not re-copy any.
+  # If instance is a tf.Variable, return it; do not re-copy any.
   # Note we check variables via their name and not their type. This
   # is because if we get variables through an op's inputs, it has
-  # type tf.Tensor: we can only tell it is a variable via its name.
-  variables = {x.name: x for x in graph.get_collection(tf.GraphKeys.VARIABLES)}
+  # type tf.Tensor: we can only tell it is a Variable via its name.
+  variables = {x.name: x for
+               x in graph.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)}
   if org_instance.name in variables:
     return graph.get_tensor_by_name(variables[org_instance.name].name)
 
-  # Do the same for placeholders. Determine via its op's type.
-  if isinstance(org_instance, tf.Tensor):
-    if "Placeholder" in org_instance.op.type:
-      return org_instance
+  # Do the same for tf.placeholders.
+  if isinstance(org_instance, tf.Tensor) and \
+          "Placeholder" in org_instance.op.type:
+    return org_instance
 
   if isinstance(org_instance, RandomVariable):
     rv = org_instance
 
     # If it has copiable arguments, copy them.
-    args = []
-    for arg in rv._args:
-      if isinstance(arg, RandomVariable) or \
-         isinstance(arg, tf.Variable) or \
-         isinstance(arg, tf.Tensor) or \
-         isinstance(arg, tf.Operation):
-         arg = copy(arg, dict_swap, scope, True, copy_q)
-
-      args.append(arg)
+    args = [copy_default(arg, dict_swap, scope, True, copy_q)
+            for arg in rv._args]
 
     kwargs = {}
     for key, value in six.iteritems(rv._kwargs):
       if isinstance(value, list):
-        kwargs[key] = [
-            copy_rv(v, dict_swap, scope, True, copy_q) for v in value
-        ]
+        kwargs[key] = [copy_default(v, dict_swap, scope, True, copy_q)
+                       for v in value]
       else:
-        kwargs[key] = copy_rv(value, dict_swap, scope, True, copy_q)
+        kwargs[key] = copy_default(value, dict_swap, scope, True, copy_q)
 
     kwargs['name'] = new_name
     # Create new random variable with copied arguments.
-    new_rv = rv.__class__(*args, **kwargs)
+    new_rv = type(rv)(*args, **kwargs)
     return new_rv
   elif isinstance(org_instance, tf.Tensor):
     tensor = org_instance
@@ -191,10 +244,10 @@ def copy(org_instance, dict_swap=None, scope="copied",
         graph.add_to_collection(name, new_tensor)
 
     return new_tensor
-  else:  # tf.Operation
+  elif isinstance(org_instance, tf.Operation):
     op = org_instance
 
-    # Do not copy queue operations
+    # Do not copy queue operations.
     if 'Queue' in op.type:
       return op
 
@@ -203,24 +256,6 @@ def copy(org_instance, dict_swap=None, scope="copied",
       new_original_op = copy(op._original_op, dict_swap, scope, True, copy_q)
     else:
       new_original_op = None
-
-    # If it has control inputs, copy them.
-    new_control_inputs = []
-    for x in op.control_inputs:
-      elem = copy(x, dict_swap, scope, True, copy_q)
-      if not isinstance(elem, tf.Operation):
-        elem = tf.convert_to_tensor(elem)
-
-      new_control_inputs += [elem]
-
-    # If it has inputs, copy them.
-    new_inputs = []
-    for x in op.inputs:
-      elem = copy(x, dict_swap, scope, True, copy_q)
-      if not isinstance(elem, tf.Operation):
-        elem = tf.convert_to_tensor(elem)
-
-      new_inputs += [elem]
 
     # Make a copy of the node def.
     # As an instance of tensorflow.core.framework.graph_pb2.NodeDef, it
@@ -231,7 +266,6 @@ def copy(org_instance, dict_swap=None, scope="copied",
 
     # Copy the other inputs needed for initialization.
     output_types = op._output_types[:]
-    input_types = op._input_types[:]
 
     # Make a copy of the op def.
     # It is unique to every Operation type.
@@ -239,12 +273,34 @@ def copy(org_instance, dict_swap=None, scope="copied",
 
     ret = tf.Operation(new_node_def,
                        graph,
-                       new_inputs,
+                       [],
                        output_types,
-                       new_control_inputs,
-                       input_types,
+                       [],
+                       [],
                        new_original_op,
                        op_def)
+
+    # advertise op early to break recursions
+    graph._add_op(ret)
+
+    # If it has control inputs, copy them.
+    elems = []
+    for x in op.control_inputs:
+      elem = copy(x, dict_swap, scope, True, copy_q)
+      if not isinstance(elem, tf.Operation):
+        elem = tf.convert_to_tensor(elem)
+
+      elems.append(elem)
+
+    ret._add_control_inputs(elems)
+
+    # If it has inputs, copy them.
+    for x in op.inputs:
+      elem = copy(x, dict_swap, scope, True, copy_q)
+      if not isinstance(elem, tf.Operation):
+        elem = tf.convert_to_tensor(elem)
+
+      ret._add_input(elem)
 
     # Use Graph's private methods to add the op, following
     # implementation of `tf.Graph().create_op()`.
@@ -254,7 +310,6 @@ def copy(org_instance, dict_swap=None, scope="copied",
 
     if compute_shapes:
       set_shapes_for_outputs(ret)
-    graph._add_op(ret)
     graph._record_op_seen_by_control_dependencies(ret)
 
     if compute_device:
@@ -295,6 +350,8 @@ def copy(org_instance, dict_swap=None, scope="copied",
           attr_value_pb2.AttrValue(s=compat.as_bytes(graph._container)))
 
     return ret
+  else:
+    raise TypeError("Could not copy instance: " + str(org_instance))
 
 
 def get_ancestors(x, collection=None):
@@ -315,12 +372,11 @@ def get_ancestors(x, collection=None):
 
   Examples
   --------
-  >>> a = Normal(mu=0.0, sigma=1.0)
-  >>> b = Normal(mu=a, sigma=1.0)
-  >>> c = Normal(mu=0.0, sigma=1.0)
-  >>> d = Normal(mu=tf.mul(b, c), sigma=1.0)
-  >>> set(ed.get_ancestors(d)) == set([a, b, c])
-  True
+  >>> a = Normal(0.0, 1.0)
+  >>> b = Normal(a, 1.0)
+  >>> c = Normal(0.0, 1.0)
+  >>> d = Normal(b * c, 1.0)
+  >>> assert set(ed.get_ancestors(d)) == set([a, b, c])
   """
   if collection is None:
     collection = random_variables()
@@ -328,19 +384,62 @@ def get_ancestors(x, collection=None):
   node_dict = {node.value(): node for node in collection}
 
   # Traverse the graph. Add each node to the set if it's in the collection.
-  output = set([])
-  nodes = set([x])
+  output = set()
+  visited = set()
+  nodes = {x}
   while nodes:
     node = nodes.pop()
+
+    if node in visited:
+      continue
+    visited.add(node)
+
     if isinstance(node, RandomVariable):
       node = node.value()
 
     candidate_node = node_dict.get(node, None)
-    if candidate_node and candidate_node != x:
+    if candidate_node is not None and candidate_node != x:
       output.add(candidate_node)
 
     nodes.update(node.op.inputs)
 
+  return list(output)
+
+
+def get_blanket(x, collection=None):
+  """Get Markov blanket of input, which consists of its parents, its
+  children, and the other parents of its children.
+
+  Parameters
+  ----------
+  x : RandomVariable or tf.Tensor
+    Query node to find Markov blanket of.
+  collection : list of RandomVariable, optional
+    The collection of random variables to check with respect to;
+    defaults to all random variables in the graph.
+
+  Returns
+  -------
+  list of RandomVariable
+    Markov blanket of x.
+
+  Examples
+  --------
+  >>> a = Normal(0.0, 1.0)
+  >>> b = Normal(0.0, 1.0)
+  >>> c = Normal(a * b, 1.0)
+  >>> d = Normal(0.0, 1.0)
+  >>> e = Normal(c * d, 1.0)
+  >>> assert set(ed.get_blanket(c)) == set([a, b, d, e])
+  """
+  output = set()
+  output.update(get_parents(x, collection))
+  children = get_children(x, collection)
+  output.update(children)
+  for child in children:
+    output.update(get_parents(child, collection))
+
+  output.discard(x)
   return list(output)
 
 
@@ -362,12 +461,11 @@ def get_children(x, collection=None):
 
   Examples
   --------
-  >>> a = Normal(mu=0.0, sigma=1.0)
-  >>> b = Normal(mu=a, sigma=1.0)
-  >>> c = Normal(mu=a, sigma=1.0)
-  >>> d = Normal(mu=c, sigma=1.0)
-  >>> set(ed.get_children(a)) == set([b, c])
-  True
+  >>> a = Normal(0.0, 1.0)
+  >>> b = Normal(a, 1.0)
+  >>> c = Normal(a, 1.0)
+  >>> d = Normal(c, 1.0)
+  >>> assert set(ed.get_children(a)) == set([b, c])
   """
   if collection is None:
     collection = random_variables()
@@ -375,15 +473,21 @@ def get_children(x, collection=None):
   node_dict = {node.value(): node for node in collection}
 
   # Traverse the graph. Add each node to the set if it's in the collection.
-  output = set([])
-  nodes = set([x])
+  output = set()
+  visited = set()
+  nodes = {x}
   while nodes:
     node = nodes.pop()
+
+    if node in visited:
+      continue
+    visited.add(node)
+
     if isinstance(node, RandomVariable):
       node = node.value()
 
     candidate_node = node_dict.get(node, None)
-    if candidate_node and candidate_node != x:
+    if candidate_node is not None and candidate_node != x:
       output.add(candidate_node)
     else:
       for op in node.consumers():
@@ -410,12 +514,11 @@ def get_descendants(x, collection=None):
 
   Examples
   --------
-  >>> a = Normal(mu=0.0, sigma=1.0)
-  >>> b = Normal(mu=a, sigma=1.0)
-  >>> c = Normal(mu=a, sigma=1.0)
-  >>> d = Normal(mu=c, sigma=1.0)
-  >>> set(ed.get_descendants(a)) == set([b, c, d])
-  True
+  >>> a = Normal(0.0, 1.0)
+  >>> b = Normal(a, 1.0)
+  >>> c = Normal(a, 1.0)
+  >>> d = Normal(c, 1.0)
+  >>> assert set(ed.get_descendants(a)) == set([b, c, d])
   """
   if collection is None:
     collection = random_variables()
@@ -423,46 +526,27 @@ def get_descendants(x, collection=None):
   node_dict = {node.value(): node for node in collection}
 
   # Traverse the graph. Add each node to the set if it's in the collection.
-  output = set([])
-  nodes = set([x])
+  output = set()
+  visited = set()
+  nodes = {x}
   while nodes:
     node = nodes.pop()
+
+    if node in visited:
+      continue
+    visited.add(node)
+
     if isinstance(node, RandomVariable):
       node = node.value()
 
     candidate_node = node_dict.get(node, None)
-    if candidate_node and candidate_node != x:
+    if candidate_node is not None and candidate_node != x:
       output.add(candidate_node)
 
     for op in node.consumers():
       nodes.update(op.outputs)
 
   return list(output)
-
-
-def get_dims(x):
-  """Get values of each dimension.
-
-  Parameters
-  ----------
-  x : float, int, tf.Tensor, np.ndarray, or RandomVariable
-    A n-D tensor.
-
-  Returns
-  -------
-  list of int
-    Python list containing dimensions of ``x``.
-  """
-  if isinstance(x, float) or isinstance(x, int):
-    return []
-  elif isinstance(x, tf.Tensor) or isinstance(x, tf.Variable):
-    return x.get_shape().as_list()
-  elif isinstance(x, np.ndarray):
-    return list(x.shape)
-  elif isinstance(x, RandomVariable):
-    return x.get_batch_shape().as_list()
-  else:
-    raise NotImplementedError()
 
 
 def get_parents(x, collection=None):
@@ -483,12 +567,11 @@ def get_parents(x, collection=None):
 
   Examples
   --------
-  >>> a = Normal(mu=0.0, sigma=1.0)
-  >>> b = Normal(mu=a, sigma=1.0)
-  >>> c = Normal(mu=0.0, sigma=1.0)
-  >>> d = Normal(mu=tf.mul(b, c), sigma=1.0)
-  >>> set(ed.get_parents(d)) == set([b, c])
-  True
+  >>> a = Normal(0.0, 1.0)
+  >>> b = Normal(a, 1.0)
+  >>> c = Normal(0.0, 1.0)
+  >>> d = Normal(b * c, 1.0)
+  >>> assert set(ed.get_parents(d)) == set([b, c])
   """
   if collection is None:
     collection = random_variables()
@@ -496,15 +579,21 @@ def get_parents(x, collection=None):
   node_dict = {node.value(): node for node in collection}
 
   # Traverse the graph. Add each node to the set if it's in the collection.
-  output = set([])
-  nodes = set([x])
+  output = set()
+  visited = set()
+  nodes = {x}
   while nodes:
     node = nodes.pop()
+
+    if node in visited:
+      continue
+    visited.add(node)
+
     if isinstance(node, RandomVariable):
       node = node.value()
 
     candidate_node = node_dict.get(node, None)
-    if candidate_node and candidate_node != x:
+    if candidate_node is not None and candidate_node != x:
       output.add(candidate_node)
     else:
       nodes.update(node.op.inputs)
@@ -530,14 +619,13 @@ def get_siblings(x, collection=None):
 
   Examples
   --------
-  >>> a = Normal(mu=0.0, sigma=1.0)
-  >>> b = Normal(mu=a, sigma=1.0)
-  >>> c = Normal(mu=a, sigma=1.0)
-  >>> ed.get_siblings(b) == [c]
-  True
+  >>> a = Normal(0.0, 1.0)
+  >>> b = Normal(a, 1.0)
+  >>> c = Normal(a, 1.0)
+  >>> assert ed.get_siblings(b) == [c]
   """
   parents = get_parents(x, collection)
-  siblings = set([])
+  siblings = set()
   for parent in parents:
     siblings.update(get_children(parent, collection))
 
@@ -565,25 +653,30 @@ def get_variables(x, collection=None):
   --------
   >>> a = tf.Variable(0.0)
   >>> b = tf.Variable(0.0)
-  >>> c = Normal(mu=tf.mul(a, b), sigma=1.0)
-  >>> set(ed.get_variables(c)) == set([a, b])
-  True
+  >>> c = Normal(a * b, 1.0)
+  >>> assert set(ed.get_variables(c)) == set([a, b])
   """
   if collection is None:
-    collection = tf.all_variables()
+    collection = tf.global_variables()
 
   node_dict = {node.name: node for node in collection}
 
   # Traverse the graph. Add each node to the set if it's in the collection.
-  output = set([])
-  nodes = set([x])
+  output = set()
+  visited = set()
+  nodes = {x}
   while nodes:
     node = nodes.pop()
+
+    if node in visited:
+      continue
+    visited.add(node)
+
     if isinstance(node, RandomVariable):
       node = node.value()
 
     candidate_node = node_dict.get(node.name, None)
-    if candidate_node and candidate_node != x:
+    if candidate_node is not None and candidate_node != x:
       output.add(candidate_node)
 
     nodes.update(node.op.inputs)

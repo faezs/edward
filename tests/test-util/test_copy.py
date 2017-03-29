@@ -25,7 +25,7 @@ class test_copy_class(tf.test.TestCase):
       y = tf.constant(3.0)
       z = x * y
       z_new = copy(z)
-      tf.initialize_variables([x]).run()
+      tf.variables_initializer([x]).run()
       self.assertEqual(z_new.eval(), 6.0)
 
   def test_queue(self):
@@ -79,7 +79,7 @@ class test_copy_class(tf.test.TestCase):
       z = x * y
       qx = tf.Variable(4.0, name="CustomName")
       z_new = copy(z, {x: qx})
-      tf.initialize_variables([qx]).run()
+      tf.variables_initializer([qx]).run()
       self.assertEqual(z_new.eval(), 12.0)
 
   def test_placeholder_tensor(self):
@@ -129,6 +129,30 @@ class test_copy_class(tf.test.TestCase):
       qx = Normal(mu=10.0, sigma=0.1)
       z_new = copy(z, {x.value(): qx})
       self.assertGreater(z_new.eval(), 5.0)
+
+  def test_scan(self):
+    with self.test_session():
+      set_seed(42)
+      op = tf.scan(lambda a, x: a + x, tf.constant([2.0, 3.0, 1.0]))
+
+      self.assertAllClose(op.eval(), [2.0, 5.0, 6.0])
+      self.assertAllClose(copy(op).eval(), [2.0, 5.0, 6.0])
+
+  def test_scan_random(self):
+    with self.test_session() as session:
+      set_seed(1234)
+      op = tf.scan(lambda a, x: a + x, tf.random_normal([3]))
+      copy_op = copy(op)
+
+      result = session.run([copy_op, copy_op, op, op])
+      self.assertAllClose(result[0], result[1])
+      self.assertAllClose(result[2], result[3])
+
+      # currently set_seed does seem to prevent variate generation to work
+      # self.assertNotAlmostEquals(result[0][0], result[2][0])
+      # self.assertNotAlmostEquals(result[0][1], result[2][1])
+      # self.assertNotAlmostEquals(result[0][2], result[2][2])
+
 
 if __name__ == '__main__':
   tf.test.main()

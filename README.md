@@ -17,7 +17,7 @@ It supports __modeling__ with
 + Neural networks (via libraries such as
     [Keras](http://keras.io) and [TensorFlow
     Slim](https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/slim))
-+ Conditionally specified undirected models
++ Intractable likelihoods
 + Bayesian nonparametrics and probabilistic programs
 
 It supports __inference__ with
@@ -25,7 +25,7 @@ It supports __inference__ with
 + Variational inference
   + Black box variational inference
   + Stochastic variational inference
-  + Inclusive KL divergence: KL(p||q)
+  + Generative adversarial networks
   + Maximum a posteriori estimation
 + Monte Carlo
   + Hamiltonian Monte Carlo
@@ -49,5 +49,7 @@ visualization with TensorBoard.
 ## Resources
 
 + [Edward website](http://edwardlib.org)
++ [Edward Forum](http://discuss.edwardlib.org)
 + [Edward Gitter channel](http://gitter.im/blei-lab/edward)
 + [Edward releases](https://github.com/blei-lab/edward/releases)
++ [Edward papers, posters, and slides](https://github.com/edwardlib/papers)

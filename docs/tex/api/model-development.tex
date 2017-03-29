@@ -26,14 +26,19 @@ class CustomRandomVariable(RandomVariable, Distribution):
 \end{lstlisting}
 
 One method that all Edward random variables call during instantiation is
-\href{https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/distributions/python/ops/distribution.py#L557}{\texttt{_sample_n()}}.
+\texttt{_sample_n()}.
 It takes an integer \texttt{n} as input and outputs a tensor of shape
-\href{https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/distributions/python/ops/distribution.py#L213}{\texttt{(n,) + batch_shape + event_shape}}.
-To implement it, you can for example wrap a NumPy/SciPy function
-inside the TensorFlow operation \texttt{tf.py_func()}.
+\texttt{(n,) + batch_shape + event_shape}, where \texttt{batch_shape}
+is the number of independent distributions in the instantiated object
+and \texttt{event_shape} is the shape of an individual distribution.
 
-For other methods and attributes one can implement, see the API documentation in
-TensorFlow's
+For examples of custom random variables developed in Edward, see
+\href{https://github.com/blei-lab/edward/blob/master/edward/models/empirical.py}{\texttt{empirical.py}}
+and
+\href{https://github.com/blei-lab/edward/blob/master/edward/models/point_mass.py}{\texttt{point_mass.py}}
+in the Github repository.
+For more details and more methods one can implement, see the API
+documentation in TensorFlow's
 \href{https://www.tensorflow.org/versions/master/api_docs/python/contrib.distributions/base_classes#Distribution}{\texttt{Distribution} class}.
 
 \subsubsection{Advanced settings}
@@ -44,7 +49,6 @@ implement and overwrite the missing method. For example, to implement
 your own sampling for \texttt{Poisson}:
 
 \begin{lstlisting}[language=Python]
-import edward as ed
 from edward.models import Poisson
 from scipy.stats import poisson
 
@@ -57,8 +61,9 @@ def _sample_n(self, n=1, seed=None):
   val = tf.py_func(np_sample, [self.lam, n], [tf.float32])[0]
   # set shape from unknown shape
   batch_event_shape = self.get_batch_shape().concatenate(self.get_event_shape())
-  shape = tf.concat(0, [tf.expand_dims(n, 0),
-                        tf.constant(batch_event_shape.as_list(), dtype=tf.int32)])
+  shape = tf.concat([tf.expand_dims(n, 0),
+                     tf.constant(batch_event_shape.as_list(), dtype=tf.int32)],
+                     0)
   val = tf.reshape(val, shape)
   return val
 
@@ -66,9 +71,9 @@ Poisson._sample_n = _sample_n
 
 sess = ed.get_session()
 x = Poisson(lam=1.0)
-sess.run(x.value())
+sess.run(x)
 ## 1.0
-sess.run(x.value())
+sess.run(x)
 ## 4.0
 \end{lstlisting}
 
@@ -77,7 +82,7 @@ you'd like to work with non-scalar parameters; it is not correct in
 this toy implementation.)
 
 Sometimes the random variable you'd like to work with does not even
-admit (easy) sampling, and you're only using it as a likelihood "node" rather
+admit (easy) sampling, and you're only using it as a likelihood ``node'' rather
 than as some prior to parameters of another random variable.
 You can avoid having to implement \texttt{_sample_n} altogether:
 after creating \texttt{CustomRandomVariable}, instantiate it with the

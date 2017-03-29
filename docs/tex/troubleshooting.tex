@@ -4,23 +4,38 @@
 
 \subsubsection{Basic Installation}
 
-\textbf{Warning: TensorFlow v0.12.0 and 0.12.1 broke
-compatibility with Edward. Use at most
-\href{https://www.tensorflow.org/versions/r0.11/get_started/os_setup.html#download-and-setup}{TensorFlow v0.11.0} for now.}
+\textbf{Note:
+TensorFlow v1.1.0rc0 made breaking API changes.
+Edward's latest stable version only supports up to TensorFlow v1.0.1.
+If you aim to use TensorFlow v1.1.0rc0 or beyond, use the
+following development branch of Edward:
+}
+
+\begin{lstlisting}[language=JSON]
+pip install -e "git+https://github.com/blei-lab/edward.git@bugfix/issue-451#egg=edward"
+\end{lstlisting}
+
+\textbf{See \href{https://github.com/blei-lab/edward/pull/452}
+{the branch} for more details.}
 
 Edward depends on
 
 \begin{itemize}
   \item NumPy (>=1.7)
   \item Six (>=1.1.0)
-  \item TensorFlow (>=0.11.0rc0, !=0.12.0rc0, !=0.12.0rc1, !=0.12.0, !=0.12.1)
+  \item TensorFlow (>=1.0.0a0, <=1.0.1)
 \end{itemize}
 
-We recommend using \texttt{pip} to install \texttt{numpy},
-\texttt{six}, and \texttt{tensorflow} as
+Installing \texttt{edward} by default also installs \texttt{numpy} and
+\texttt{six} if they are not available (or are out-of-date in your
+system).
+
+Installing \texttt{edward} does not automatically install TensorFlow
+(or update an existing TensorFlow version). We recommend installing
+it via
 
 \begin{lstlisting}[language=JSON]
-pip install numpy six tensorflow
+pip install tensorflow
 \end{lstlisting}
 
 To use Edward with GPUs, install \texttt{tensorflow-gpu} instead of
@@ -29,6 +44,10 @@ To use Edward with GPUs, install \texttt{tensorflow-gpu} instead of
 \begin{lstlisting}[language=JSON]
 pip install tensorflow-gpu
 \end{lstlisting}
+
+See TensorFlow's
+\href{https://www.tensorflow.org/install/}{installation instructions}
+for details, including how to setup up NVIDIA software for TensorFlow with GPUs.
 
 \subsubsection{Full Installation}
 
@@ -43,18 +62,8 @@ pip install keras
 \end{lstlisting}
 \href{https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/slim}{TensorFlow
 Slim} (native in TensorFlow), and
-\href{https://github.com/google/prettytensor}{PrettyTensor} (>=0.5.3)
+\href{https://github.com/google/prettytensor}{PrettyTensor} (>=0.7.4)
 \begin{lstlisting}[language=JSON]
 pip install prettytensor
-\end{lstlisting}
-  \item The \href{http://mc-stan.org}{Stan} modeling language is supported
-  through PyStan (>=2.0.1.3).
-\begin{lstlisting}[language=JSON]
-pip install pystan
-\end{lstlisting}
-  \item The \href{http://pymc-devs.github.io/pymc3/}{PyMC3} modeling language is supported
-  through PyMC3 (>=3.0).
-\begin{lstlisting}[language=JSON]
-pip install pymc3
 \end{lstlisting}
 \end{itemize}
